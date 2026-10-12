@@ -1,269 +1,117 @@
-# AGENTS.md
+# Agent instructions
 
-Onboarding for anyone arriving without the history: a contributor, a maintainer, a
-person reading out of curiosity, or an AI agent picking up a task. Read this first.
-It is the shortest path to being useful here without breaking something that matters.
+Repository-level instructions for AI coding agents working on Neuron. Follow these rules before changing code. Read task-specific documentation as needed; don't load the entire documentation set by default.
 
-If you only take three things away, take these:
+## Project and architecture
 
-1. **Tests may never arm input.** A test whose only job is enforcing that exists.
-2. **A device write either verifies itself against the hardware's own bytes, or it
-   stays gated.** Never guess at someone's hardware.
-3. **More, never bloat.** neuron does a lot on purpose. Every addition earns its
-   place, or it doesn't ship.
+Neuron is a Rust workspace containing a Windows-first Razer device-control app and CLI. It uses raw HID, a shared core, and a single **Trigger → Action** dispatch engine. Linux source builds are in development; macOS is not implemented. Experimental Logitech HID++ discovery is read-only and unverified on hardware.
 
----
+**Architecture rules**
+- Put portable behavior, types, and tests in `neuron-core`. Keep the GUI/CLI thin.
+- Route new input sources and actions through the existing Trigger → Action engine. Do **not** build a second dispatch path.
+- Keep device-specific protocol wiring in device definitions and the protocol ledger; don't scatter unverified hardware assumptions through application code.
+- Keep runtime profile settings, lighting, and bindings together.
 
-## What this is, in four lines
-
-neuron is a tray-resident replacement for Razer Synapse: an app and CLI over one
-core that speaks `razer_report` HID directly. An experimental Logitech HID++ dialect
-does read-only adoption without hardware verification. No account, no cloud, no telemetry,
-no kernel driver, no vendor SDK. Windows ships the app and CLI. Linux
-builds both from source, with a GUI and hidraw transport; its release is deferred
-while live input, overlays, audio, and hardware behavior are verified. Runtime
-backend work is on `codex/linux-runtime-parity`. Mac is unwritten.
-
-The whole product is one primitive:
-
-```text
-Trigger -> Action
-```
-
-*Something happened* (a button, a drawn glyph, a radial flick, the foreground app
-changing, a mic tap, a held layer) so *do this* (a keystroke, a macro, a DPI change,
-a profile switch, an overlay instrument). There is exactly one dispatch pipeline.
-**Do not add a second one.** If you find yourself building a parallel path for a new
-input source or a new effect, you have taken a wrong turn — the existing engine is
-where it goes.
-
-## The tree
-
-Six crates. The rule everywhere: **semantics live in `neuron-core` as typed, tested
-code; device wiring lives in data.**
-
-| crate | what it is |
+| Location | Purpose |
 |---|---|
-| `crates/neuron-core` | The headless engine: HID protocol, device registry, lighting, the trigger/action spine, gestures, macros, profiles, and the process-wide safety gates. Portable by construction. |
-| `crates/neuron-app` | The Slint GUI and live driver. Windows is the release target; Linux has a partial source-build runtime. |
-| `crates/neuron-cli` | A thin front-end over core, plus a headless daemon run path. |
-| `crates/neuron-host` | The protocol hub: ownership arbiter, signal bus, and the OpenRGB / Chroma adapters other apps drive neuron through. |
-| `crates/engram` | Woflo Labs trajectory codec — the eigenmotion math behind gesture recognition. Its own license; see `LICENSE.md`. |
-| `crates/neuron-testkit` | Shared test scaffolding: mock transport, fault injection. |
+| `crates/neuron-core` | Engine, HID protocol, registry, input dispatch, lighting, profiles, macros, safety gates |
+| `crates/neuron-app` | Slint GUI and platform runtime |
+| `crates/neuron-cli` | CLI and headless daemon |
+| `crates/neuron-host` | OpenRGB/Chroma integrations, ownership arbitration, signal bus |
+| `crates/engram` | Gesture codec/research; separate license terms |
+| `crates/neuron-testkit` | Mock transports and fault-injection test utilities |
+| `crates/neuron-core/devices/` | Curated device definitions; these override runtime `devices/auto/` definitions |
+| `crates/neuron-core/protocol/ledger.toml` | Evidence for HID opcodes and write safety |
 
-Non-code state that matters: `profiles/*.toml` (a profile is one object — its
-settings, its lighting, and its binds), `*.rules.toml` sidecars, `cast.toml`,
-`feel.toml`. Device definitions live in `crates/neuron-core/devices/` (curated) and
-in the run root's `devices/auto/` (auto-synthesized; a curated file shadows an auto
-one).
+## Non-negotiable safety rules
 
-## Where to read next
+1. **Tests must never arm or inject input or contact real hardware.** Preserve the process-wide arm gate and the test-only deny-by-default transport policy. Only the live GUI or daemon may arm input.
+2. **Verify every device write.** Use the matching read-back getter; treat mismatches as errors. Default writes to volatile (`NOSTORE`), except scroll-stage selection, which stores onboard by default. Never invent an opcode or report success based only on a successful send.
+3. **Gate unverified writes.** New write capabilities remain behind `NEURON_*_WRITE` controls until supported by wire-capture evidence. When evidence is missing, refuse the operation.
+4. **Maintain protocol evidence.** Add or update `crates/neuron-core/protocol/ledger.toml` whenever an opcode or hardware claim changes. Grades are `live / capture / agreed / single / derived`; include dated evidence and pin upstream factual citations to a commit SHA. `tests/protocol_ledger.rs` enforces coverage and gating.
+5. **Match documentation to reality.** When support or verification changes, update `docs/STATUS.md` and the applicable documentation. Do not describe compiled or simulated behavior as hardware-verified.
+6. **Get owner approval before changing HID interception, device write paths, or the Python bridge.** These are `risky` areas even for otherwise small tasks. Stop before implementing them if approval has not been given.
 
-| you want | read |
-|---|---|
-| What it does and why anyone would want it | [`README.md`](README.md) |
-| The features in depth — every subsystem, and what it feels like to use | [`docs/GDD.md`](docs/GDD.md) |
-| How it's built — runtime model, dispatch flow, safety contracts, risks | [`docs/TDD.md`](docs/TDD.md) |
-| The protocol hub's design | [`docs/reference/PROTOCOL-HOST.md`](docs/reference/PROTOCOL-HOST.md) |
-| What actually works today, honestly graded | [`docs/STATUS.md`](docs/STATUS.md) |
-| How to send a change | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
-| The label taxonomy, if you're filing or picking up issues | [`.github/LABELS.md`](.github/LABELS.md) |
-| You're helping a *user* install, update, or run neuron, not changing its code | [`skills/neuron-lazy-update/SKILL.md`](skills/neuron-lazy-update/SKILL.md) |
-| You're writing a Python macro or using beacons | [`skills/neuron-macros/SKILL.md`](skills/neuron-macros/SKILL.md) |
-| You're setting up or changing a user's binds, lighting, profiles or whole setup through the CLI | [`skills/neuron-cli/SKILL.md`](skills/neuron-cli/SKILL.md), reference in [`docs/reference/CLI.md`](docs/reference/CLI.md) |
-| You're making or revising a promo / ad video | [`skills/neuron-promo/SKILL.md`](skills/neuron-promo/SKILL.md) |
+## Workflow
 
-**The code is the source of truth.** `docs/TDD.md` and `docs/reference/PROTOCOL-HOST.md` both
-carry a banner saying an LLM wrote them while building neuron. That banner is
-accurate, and it is not a disclaimer to skim past: these docs are a map, and a map
-can be stale. Verify against the tree before you lean on a detail.
+1. **Inspect:** Read the relevant implementation, tests, and local conventions before editing. Treat source and tests as authoritative; design documents can be stale.
+2. **Scope:** Make the smallest change that solves the task. Preserve unrelated local changes. Do not refactor neighboring systems without cause.
+3. **Implement:** Maintain existing public contracts, safety gates, protocol evidence, and license boundaries.
+4. **Test:** Run relevant targeted checks, then repository validation when practical.
+5. **Verify behavior:** A passing build or unit suite does not prove the GUI works or device writes succeed on hardware.
+6. **Report:** State what changed, which commands ran, their results, any actual GUI/hardware/platform testing, and what remains unverified.
 
-## The gates
+Do not publish releases, public announcements, or modify external accounts/configuration without explicit approval in the current session.
 
-**One line. Put it in your plan and run it before you claim you're done:**
+## Validation commands
+
+The primary gate is `validate.ps1`; CI calls the same script.
 
 ```powershell
-.\validate.ps1
+.\validate.ps1               # Workspace build and tests
+.\validate.ps1 -Locked       # Lockfile-enforced CI-equivalent dependencies
+.\validate.ps1 -Mode full    # Feature matrix, release build, safe ignored tests, Clippy
+.\validate.ps1 -Mode lint    # Format/PowerShell parsing checks
 ```
 
-That compiles the whole workspace and runs the suite. The CI workflows invoke
-this script rather than maintaining separate cargo commands. A local pass
-checks the same code gates; it cannot replace a platform or hardware run.
-
-```powershell
-.\validate.ps1 -Mode full    # + feature matrix, release build, the CI-safe ignored tests
-.\validate.ps1 -Locked       # add --locked, exactly reproducing a CI run
-```
-
-The Windows and Linux CI jobs are configured to run this when code changes; a
-docs-only push skips the build jobs. Clippy is a gate in full mode; rustfmt
-remains advisory because the source uses an unpinned hand-formatting style.
-
-**On Linux**, install PowerShell 7 and run the same thing:
+On Linux, use PowerShell 7:
 
 ```bash
 pwsh ./validate.ps1
 ```
 
-That runs the complete Linux workspace, including `neuron-app`. Install the Slint
-fontconfig/X11/Wayland and GTK/AppIndicator development libraries first. The gate
-cannot prove hardware behavior without a real device, or Windows behavior when a
-Win32 seam resolves to a Linux stub. If you touched input, overlays, the tray, or
-audio, name the platform and hardware you tested in the PR.
+Linux app builds require the relevant Slint, fontconfig, X11/Wayland, GTK/AppIndicator development libraries. Validation does not establish cross-platform runtime parity or prove physical device functionality.
 
-The platform-free gates — rustfmt and a parse of every shipped `.ps1` — have their own lane:
+**Build and editing hazards**
+- **Never run `cargo fmt --all`.** There is no pinned rustfmt style; whole-tree formatting creates extensive unrelated changes. Match local formatting and keep diffs focused. Rustfmt is advisory.
+- **Do not run concurrent builds using the same `CARGO_TARGET_DIR`.** Use separate target directories for parallel jobs. If incremental linkage fails with spurious `LNK2019 anon.*.llvm` errors, clear `target/debug/incremental`.
+- **Preserve UTF-8.** Avoid PowerShell 5.1 `Get-Content` → `Set-Content` round trips for source files; use a UTF-8-preserving editor or .NET file IO with no-BOM UTF-8.
+- **Close a running Neuron tray app before Windows release builds** so the executable is not locked.
+- **Do not overwrite an existing dirty working tree** or discard another contributor's changes.
 
-```bash
-pwsh ./validate.ps1 -Mode lint
-```
+## Verification by change type
 
-### Do not
+| Change | Required evidence |
+|---|---|
+| Core logic | Relevant tests and repository validation |
+| GUI/Slint | Launch and inspect the affected UI states; add render smoke coverage in `apptest.rs` for conditional/hovered controls |
+| Input injection/macros | Confirm safety gates and disarmed tests remain intact; live behavior only with explicit owner authorization |
+| HID/device/lighting | Check protocol ledger and read-back tests; identify actual device model and measured behavior if hardware tested |
+| Windows/Linux runtime | State the OS and runtime path actually tested; do not infer platform parity from compilation |
+| Docs only | Verify claims, paths, links, and examples against source; code build may be unnecessary |
 
-- **Do not run `cargo fmt --all`.** The source is hand-formatted and no
-  `rustfmt.toml` pins that style, so a blanket format rewrites ~1900 sites, buries
-  your change in noise, and destroys `git blame` across a codebase whose comments are
-  its most valuable asset. Match the surrounding style instead.
-- **Do not run two builds at once.** It corrupts the incremental cache and you get
-  bogus `LNK2019 anon.*.llvm` errors; clear `target/debug/incremental` to recover.
-  (Separate `CARGO_TARGET_DIR` lanes are fine, and are the way to parallelize.)
-- **Do not round-trip repo sources through PowerShell 5.1's `Get-Content` /
-  `Set-Content`.** It re-decodes UTF-8 as ANSI and leaves mojibake through the tree.
-  Use an editor that preserves UTF-8, or .NET file IO with a no-BOM `UTF8Encoding`.
-- **Do not leave the tray app running during a release build.** Windows locks the
-  live `.exe` and the build fails.
+The SYSTEM diagnostics bench has nine read-only probes for real-device checks. Do not confuse safe read-only diagnostics with write validation. If hardware, platform, or UI access is unavailable, explicitly report **not tested**.
 
-## The invariants, spelled out
+## Code, comments, and UI
 
-**The arm gate.** Every synthesized keystroke, click, and process spawn goes through
-one process-wide switch that starts *disarmed*. Only the running daemon or GUI ever
-flips it. Tests cannot arm it, and a dedicated test enforces that. If you are
-touching anything that synthesizes input, you are touching this, and it is `risky`
-work by definition.
+**Comments:** Document constraints, protocol byte layouts, evidence, failure contracts, and non-obvious reasoning. Include `// SAFETY:` explanations for `unsafe` and keep required SPDX/license headers. Avoid line-by-line narration, conversational asides, and lengthy histories. Record debugging history in commits or issues rather than source comments.
 
-**Read-back verification.** Device writes default to volatile (`NOSTORE`) (the one
-exception is `scroll`, which stores onboard by default to match Synapse), re-read the
-matching getter, and hard-error on a mismatch rather than reporting a silent
-success. A capability with no trusted opcode refuses rather than guessing. New writes
-stay behind a `NEURON_*_WRITE` feature gate until a wire capture confirms them. A
-an unverified guess must stay gated, and a read-back mismatch must fail loudly.
+**UI:** Put settings and feedback next to the feature they affect instead of introducing a separate dialog/page when the local surface can handle it. Preview effects on the actual subject when possible. Avoid instructional paragraphs, redundant captions, gratuitous animation, and unnecessary visual elements. Keep list/model row identity stable when updating live Slint data; replacing whole models can discard hover state or active text edits. Use `theme.slint` for motion conventions.
 
-**The protocol ledger.** Every wire fact neuron speaks has an entry in
-`crates/neuron-core/protocol/ledger.toml`: its grade (live / capture / agreed / single /
-derived), dated hardware evidence, and upstream citations pinned to a commit SHA (facts only,
-never copied code). `tests/protocol_ledger.rs` fails when an opcode in a device def or in
-neuron-core has no entry, when a grade outruns its evidence, or when a write below `capture`
-ships without a gate or declared `ungated_debt`. New opcode, new entry. Settling a conflict on
-hardware means updating its entry in the same change.
+## Task-specific references
 
-**Honesty over polish.** When neuron doesn't know something about the hardware, it
-says so. The README's proven / gated / absent ledger and the grading in
-`docs/STATUS.md` are load-bearing product features, not modesty. If you change what a
-capability actually does, update the ledger in the same change — a doc that
-overstates the code is a bug here, and gets filed as one.
+Read these when the task calls for them, rather than upfront:
 
-## Comments
+| Task | Reference |
+|---|---|
+| Feature behavior and UX | [`docs/GDD.md`](docs/GDD.md) |
+| System design and runtime | [`docs/TDD.md`](docs/TDD.md) |
+| Current verification/support | [`docs/STATUS.md`](docs/STATUS.md) |
+| Protocol host integration | [`docs/reference/PROTOCOL-HOST.md`](docs/reference/PROTOCOL-HOST.md) |
+| CLI behavior | [`docs/reference/CLI.md`](docs/reference/CLI.md) |
+| Contributor and licensing requirements | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`LICENSE.md`](LICENSE.md) |
+| Issue labels | [`.github/LABELS.md`](.github/LABELS.md), [`.github/labels.yml`](.github/labels.yml) |
+| User installation/update support | [`skills/neuron-lazy-update/SKILL.md`](skills/neuron-lazy-update/SKILL.md) |
+| Python macro development | [`skills/neuron-macros/SKILL.md`](skills/neuron-macros/SKILL.md) |
+| Configuring binds, profiles, and lighting | [`skills/neuron-cli/SKILL.md`](skills/neuron-cli/SKILL.md) |
+| Promotional video tasks | [`skills/neuron-promo/SKILL.md`](skills/neuron-promo/SKILL.md) |
 
-Write the comment a maintainer needs, or write none.
+`docs/TDD.md` and `docs/reference/PROTOCOL-HOST.md` were written with an LLM and may be stale. Check implementation before relying on architectural claims.
 
-**Keep:**
-- **Why**, when the code can't say it: a non-obvious constraint, an invariant, what a
-  workaround works around.
-- **Protocol and hardware facts**: byte layouts, opcodes, and where a value was verified on
-  real hardware. One line each.
-- **Safety**: `// SAFETY:` on every `unsafe`, and the reasoning behind the arm gate and
-  write gates.
-- **Public API docs** (`///`): what it does, its contract, how it fails. A sentence or two.
-- **License headers** (`SPDX-…`). A test enforces them.
+## Issues and pull requests
 
-**Cut:**
-- Narration of what the next line obviously does.
-- History: how it used to work, what was tried, how long a bug took to find. That belongs
-  in the commit message.
-- Conversation: asides, jokes, "honestly", rhetorical questions, first-person storytelling,
-  ALL-CAPS used as a tone of voice.
-- Essays defending a design. Link the doc that already explains it.
-
-The test: a comment has to make sense to someone reading the code cold, with no memory of the
-session that wrote it. If it only makes sense as part of that story, it goes in the commit
-message, not the code.
-
-## Designing UI
-
-A feature's interface stays inside that feature's space. Anything that explains, configures, or
-extends a feature lives next to it: an inline drawer, a line of text that changes, the surface
-around it reshaping. It never sends the user to another page, a modal, or a window to finish the
-thought. If a control belongs to two places, it lives where the thing it controls is, and the other
-place links to it.
-
-- **Show, don't tell.** Point at the thing itself: highlight the keys a colour covers, replay the
-  effect a row names, preview a setting on the live subject while it is dragged. A sentence is for
-  a fact the picture can't carry (a key name, a hex value, why something is unavailable).
-- **No yapping.** No instructional paragraphs, no filler captions, no labels that restate the
-  control. If the UI needs a paragraph to be understood, the design is wrong.
-- **Flow, never teleport.** Things that appear grow into place; things that go collapse out;
-  layout that must move, moves smoothly. Nothing jumps, flashes, or re-lays itself out under the
-  pointer. Motion settles quickly and never animates at the user (see `Theme` in `theme.slint`).
-- **Drive understanding.** Design for what a curious user will ask next and answer it where they
-  are looking. The goal is that using the feature teaches how it works.
-- **Useful, not gimmicky.** Every visual earns its place by answering a question. Decoration that
-  answers nothing is slop, and so is "juice" added for its own sake.
-- **Keep row identity stable.** Update live models in place; replacing a model on every tick
-  rebuilds its rows, which drops hover state and half-typed text.
-
-## Verifying your work honestly
-
-This is the part agents get wrong most often, so it is stated plainly.
-
-**"It builds and the tests pass" is not verification of a user-facing change.** The
-suite runs disarmed, and under `cfg(test)` a deny-by-default transport policy makes
-it structurally impossible to reach real hardware. That is exactly what you want from
-a test suite. It is also why a green suite says nothing about whether your lighting
-effect looks right, your GUI control responds to a click, or your device write landed.
-
-So:
-
-- **GUI changes:** launch `neuron-app` and look at it. A screenshot in the PR is
-  worth more than a paragraph. A Slint binding loop only fails when its element is drawn
-  in the state that reads it (hover-gated UI hides one from every unit test), so extend the
-  render smoke in `apptest.rs` when you add UI that changes on hover.
-- **Device / lighting changes:** the diagnostics bench on the SYSTEM page runs nine
-  read-only probes against real hardware and is always safe. That is the "prove it
-  works" surface. Name the hardware you tested on.
-- **Things you genuinely cannot verify** (audio output, a device you don't own, a
-  platform you're not on): say so explicitly. An honest "unverified on hardware" is
-  useful. A confident claim that turns out to have been a compile check is not.
-
-## If you are an AI agent
-
-Everything above applies to you. In addition:
-
-- **Stop and ask the owner** before implementing anything that touches HID
-  interception, device write paths, or the python bridge. These carry the `risky`
-  label for exactly this reason, and `risky` overrides every other signal, including
-  `freetime capable`.
-- **Never `cargo fmt --all` to "clean up".** See above. It is the single most common
-  well-intentioned way to ruin a PR here.
-- **Preserve unrelated working-tree changes.** This is an active one-person project;
-  the tree is frequently dirty with work in progress that is not yours.
-- **Label correctly when filing:** exactly one Tier-1 (type) and exactly one Tier-2
-  (`area:*`); Tier-3 flags optional. `.github/LABELS.md` has the rules,
-  `.github/labels.yml` has the set as data. Add `autonomously-derived` if the issue
-  was born in an unattended session — it tells the owner how much to trust the
-  framing before reading it.
-- **Evidence belongs in the issue body**, not in a label. The agent-ready issue
-  template asks for reproduced observations kept separate from hypotheses. Keep them
-  separate.
-- **Don't publish anything outward** — releases, public posts, account or
-  configuration changes — without the owner saying so in that session.
-
-## Getting a change in
-
-Fork, branch off `main` (`area/short-description`), keep commits focused, run the
-gates, and open a PR saying what you did, how you verified it, and what hardware you
-tested on. The PR template has a contributor-agreement checkbox that has to be
-checked before anything can be merged — see
-[`CONTRIBUTING.md`](CONTRIBUTING.md#the-legal-bit) for what it means and which paths
-fall under which license.
-
-Small and self-contained gets reviewed fastest. For anything large, open an issue
-first so the shape can be agreed before you spend a weekend on it.
+- Work on a focused branch (convention: `area/short-description`), based on the intended integration branch.
+- Include a concise change summary, tests run and results, device/OS used for any live testing, and limitations.
+- For issues, choose exactly one Tier-1 type label and one Tier-2 `area:*` label; Tier-3 flags are optional. Add `autonomously-derived` when an unattended agent session originated the issue.
+- Separate observed evidence from hypotheses. Put reproduction details in the issue body, not just labels.
+- Follow the PR contributor-agreement and license requirements in `CONTRIBUTING.md`. Do not check acceptance boxes on behalf of someone without authorization.
